@@ -7,6 +7,11 @@ source .venv/bin/activate
 uv sync
 ```
 
+To generate the reallocation map:
+```sh
+python misclassified.py
+```
+
 Login to the HF CLI:
 ```sh
 huggingface-cli login 

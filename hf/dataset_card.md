@@ -13,20 +13,23 @@ HuggingFace re-upload of the [SIMORD dataset](https://huggingface.co/datasets/mi
 
 ### Dataset Description
 
-The dataset contains three splits:
+The dataset contains three splits (with their corresponding original SIMORD files):
 
-1) `train`: examples for in-context learning or fine-tuning.
-2) `test1`: test set used for the EMNLP 2025 industry track paper. Also, previously named dev set for MEDIQA-OE shared task of ClinicalNLP 2025.
-3) `test2`: test set for MEDIQA-OE shared task of ClinicalNLP 2025.
+1) `train` (from `train.json`): examples for in-context learning or fine-tuning.
+2) `test1` (from `dev.json`): test set used for the EMNLP 2025 industry track paper.
+3) `test2` (from `test.json`): test set for MEDIQA-OE shared task of ClinicalNLP 2025.
 
 With the following distribution
 
 | Split | Original | New | Change |
 | :--- | :---: | :---: | :---: |
 | `train` | 63 | 81 | +18 |
-| `test1` | 100 | 43 | -57 |
-| `test2` | 100 | 139 | +39 |
+| `test1` | 100 | 90 | -10 |
+| `test2` | 100 | 92 | -8 |
 | **TOTAL** | **263** | **263** | **-** |
+
+Note: Both the original SIMORD dataset and this upload use the split name `test1` instead of dev/validation (even though the file is `dev.json`) and `test2` instead of test (even though the file is `test.json`), since both were used as test sets.
+
 
 ### Dataset Changes
 
@@ -42,25 +45,33 @@ For example, SIMORD's `test.json` contains an ACI-Bench train sample:
 
 The official SIMORD HF upload contains three data files that are mapped to the following splits
 
-| SIMORD File | Mapped Split | Total | Train | Valid/Dev | Test1 | Test2 | Test3 | Other | %NotBelong |
-|:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| [train.json](https://huggingface.co/datasets/microsoft/SIMORD/blob/main/data/train.json) | `train` | 63 | 15 | 8 | 8 | 10 | 8 | 14 | 76.2% |
-| [dev.json](https://huggingface.co/datasets/microsoft/SIMORD/blob/main/data/dev.json) | `test1` | 100 | 27 | 3 | 20 | 14 | 13 | 23 | 97.0% |
-| [test.json](https://huggingface.co/datasets/microsoft/SIMORD/blob/main/data/test.json) | `test2` | 100 | 25 | 9 | 11 | 16 | 19 | 20 | 54.0% |
+| SIMORD File | Mapped Split | Total | Train | Valid/Dev | Test1 | Test2 | Test3 | PriMock57 |
+|:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| [train.json](https://huggingface.co/datasets/microsoft/SIMORD/blob/main/data/train.json) | `train` | 63 | 15 | 8 | 8 | 10 | 8 | 14 |
+| [dev.json](https://huggingface.co/datasets/microsoft/SIMORD/blob/main/data/dev.json) | `test1` | 100 | 27 | 3 | 20 | 14 | 13 | 23 |
+| [test.json](https://huggingface.co/datasets/microsoft/SIMORD/blob/main/data/test.json) | `test2` | 100 | 25 | 9 | 11 | 16 | 19 | 20 |
 
 
 
-This updated version of SIMORD respects the original ACI-Bench mappings:
+This updated version of SIMORD reallocates samples using the following logic:
 
-| Updated SIMORD Splits | Derived From ACI-Bench Splits |
-|:---|:---| 
-| `train` | `train` |
-| `test1` | `valid` |
-| `test2` | `test1`, `test2`, `test3` |
+- **New `train`** = old train (train+PriMock57 samples) + old test1 (train samples) + old test2 (train samples)
+- **New `test1`** = old test1 (non-train samples) + half of old train (non-train, non-PriMock57 samples)
+- **New `test2`** = old test2 (non-train samples) + half of old train (non-train, non-PriMock57 samples)
 
-The updated SIMORD `test1` split takes the `valid` split from ACI-Bench because the original SIMORD dataset renamed their validation / dev split to `test1`. This might be a silly decision on our part, and it may be better to simply distribute all the ACI-Bench test splits between the new SIMORD `test1` and `test2` splits, and include a new SIMORD validation set to inherit ACI-Bench's `valid` split.
+In other words:
+- Samples with `_train` suffix are moved to `train`, regardless of which original file they came from
+- PriMock57 samples stay in their original splits, since PriMock57 has no explicit data splits
+- Non-train samples in the original `test1` and `test2` splits stay where they are
+- Non-train, non-PriMock57 samples that were misplaced in the original `train` split are evenly distributed between `test1` and `test2`
 
+After reallocation, the new splits contain the following counts:
 
+| New Split | Total | Train | Valid/Dev | Test1 | Test2 | Test3 | PriMock57 |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| `train` | 81 | 67 | 0 | 0 | 0 | 0 | 14 |
+| `test1` | 90 | 0 | 7 | 24 | 19 | 17 | 23 |
+| `test2` | 92 | 0 | 13 | 15 | 21 | 23 | 20 |
 
 
 ### Direct Use

@@ -467,7 +467,7 @@ def main():
     save_to_disk(data)
     
     print("\n8. Pushing to HuggingFace Hub...")
-    # push_to_hub(data)
+    push_to_hub(data)
     
     print("\n" + "=" * 60)
     print("Done!")
