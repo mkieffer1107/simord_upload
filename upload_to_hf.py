@@ -210,6 +210,142 @@ def load_acibench_transcripts() -> Dict[Tuple[str, str], str]:
 
 
 # ---------------------------------------------------------------------------
+# Transcript enumeration and provenance fixing
+# ---------------------------------------------------------------------------
+
+def enumerated_transcript(transcript: str) -> str:
+    """
+    Add 1-based line numbers before each speaker tag.
+    
+    Input:  "[doctor] hello [patient] hi"
+    Output: "1 [doctor] hello\n2 [patient] hi"
+    """
+    # Split by speaker tags, keeping the tags
+    # Pattern matches [doctor], [patient], [nurse], etc.
+    pattern = r'(\[[^\]]+\])'
+    parts = re.split(pattern, transcript)
+    
+    lines = []
+    current_line = ""
+    
+    for part in parts:
+        if re.match(pattern, part):
+            # This is a speaker tag - start a new line
+            if current_line.strip():
+                lines.append(current_line.strip())
+            current_line = part
+        else:
+            # This is dialogue content
+            current_line += part
+    
+    # Don't forget the last line
+    if current_line.strip():
+        lines.append(current_line.strip())
+    
+    # Add line numbers (1-based)
+    enumerated_lines = [f"{i+1} {line}" for i, line in enumerate(lines)]
+    return "\n".join(enumerated_lines)
+
+
+def find_reason_in_transcript(reason: str, transcript: str) -> List[int]:
+    """
+    Find line numbers where the reason text appears in the transcript.
+    Returns list of 1-based line numbers.
+    """
+    if not reason or not transcript:
+        return []
+    
+    # Split transcript into lines (speaker turns)
+    pattern = r'(\[[^\]]+\])'
+    parts = re.split(pattern, transcript)
+    
+    lines = []
+    current_line = ""
+    for part in parts:
+        if re.match(pattern, part):
+            if current_line.strip():
+                lines.append(current_line.strip().lower())
+            current_line = part
+        else:
+            current_line += part
+    if current_line.strip():
+        lines.append(current_line.strip().lower())
+    
+    reason_lower = reason.lower().strip()
+    found_lines = []
+    
+    for i, line in enumerate(lines):
+        if reason_lower in line:
+            found_lines.append(i + 1)  # 1-based
+    
+    return found_lines
+
+
+def calculate_provenance_offset(orders: List[Dict], transcript: str) -> Optional[int]:
+    """
+    Calculate the provenance offset by finding reason text in transcript.
+    
+    Uses multiple reasons (biased toward longer ones) to determine the offset.
+    Returns the offset to add to original provenances, or None if can't determine.
+    """
+    if not orders or not transcript:
+        return None
+    
+    # Collect (reason, provenance, length) tuples, sorted by reason length (longest first)
+    reason_data = []
+    for order in orders:
+        reason = order.get("reason", "")
+        provenance = order.get("provenance", [])
+        if reason and provenance:
+            reason_data.append((reason, provenance, len(reason)))
+    
+    if not reason_data:
+        return None
+    
+    # Sort by length descending (prefer longer reasons)
+    reason_data.sort(key=lambda x: -x[2])
+    
+    # Try to find offsets from multiple reasons
+    offsets = []
+    for reason, provenance, _ in reason_data:
+        found_lines = find_reason_in_transcript(reason, transcript)
+        if found_lines and provenance:
+            # Calculate offset: found_line - original_provenance
+            # Use the first found line and first provenance value
+            offset = found_lines[0] - provenance[0]
+            offsets.append(offset)
+    
+    if not offsets:
+        return None
+    
+    # Use the most common offset, or the one from the longest reason
+    from collections import Counter
+    offset_counts = Counter(offsets)
+    most_common_offset, count = offset_counts.most_common(1)[0]
+    
+    # If we have multiple samples agreeing, use that
+    if count > 1:
+        return most_common_offset
+    
+    # Otherwise use the offset from the longest reason (first in sorted list)
+    return offsets[0]
+
+
+def fix_provenances(orders: List[Dict], offset: int) -> List[Dict]:
+    """
+    Apply offset to all provenances in orders.
+    Returns new list with fixed provenances.
+    """
+    fixed_orders = []
+    for order in orders:
+        new_order = order.copy()
+        if "provenance" in new_order and new_order["provenance"]:
+            new_order["provenance"] = [p + offset for p in new_order["provenance"]]
+        fixed_orders.append(new_order)
+    return fixed_orders
+
+
+# ---------------------------------------------------------------------------
 # Build new dataset
 # ---------------------------------------------------------------------------
 
@@ -218,11 +354,11 @@ def build_simord_dataset(
     orders_map: Dict[str, List[Dict]],
     acibench_transcripts: Dict[Tuple[str, str], str],
     primock_transcripts: Dict[str, str]
-) -> Dict[str, List[Dict]]:
+) -> Tuple[Dict[str, List[Dict]], Dict]:
     """
     Build the new SIMORD dataset splits.
     
-    Returns: {split_name: [rows]}
+    Returns: ({split_name: [rows]}, provenance_shifts_info)
     """
     splits = reallocation.get("splits", {})
     result = {"train": [], "test1": [], "test2": []}
@@ -233,8 +369,13 @@ def build_simord_dataset(
         "primock": 0,
         "missing_transcript": 0,
         "missing_orders": 0,
+        "provenance_fixed": 0,
+        "provenance_unfixable": 0,
         "success": 0,
     }
+    
+    # Track provenance shifts for each ID
+    provenance_shifts = {}
     
     for split_name, ids in splits.items():
         print(f"\nProcessing split: {split_name} ({len(ids)} IDs)")
@@ -299,10 +440,28 @@ def build_simord_dataset(
                 print(f"  Warning: No orders for {simord_id}")
                 orders = []
             
+            # Calculate provenance offset and fix provenances
+            offset = calculate_provenance_offset(orders, transcript)
+            if offset is not None and offset != 0:
+                orders = fix_provenances(orders, offset)
+                stats["provenance_fixed"] += 1
+                provenance_shifts[row_id] = {"offset": offset, "status": "fixed"}
+            elif orders and any(o.get("provenance") for o in orders):
+                # Has provenances but couldn't calculate offset
+                stats["provenance_unfixable"] += 1
+                provenance_shifts[row_id] = {"offset": None, "status": "unfixable"}
+            else:
+                # No provenances to fix or offset is 0
+                provenance_shifts[row_id] = {"offset": offset if offset is not None else 0, "status": "unchanged"}
+            
+            # Create enumerated transcript
+            enumerated = enumerated_transcript(transcript)
+            
             # Build the row
             row = {
                 "id": row_id,
                 "transcript": transcript,
+                "enumerated_transcript": enumerated,
                 "orders": orders,
             }
             result[split_name].append(row)
@@ -314,9 +473,19 @@ def build_simord_dataset(
     print(f"  Primock: {stats['primock']}")
     print(f"  Missing transcript: {stats['missing_transcript']}")
     print(f"  Missing orders: {stats['missing_orders']}")
+    print(f"  Provenance fixed: {stats['provenance_fixed']}")
+    print(f"  Provenance unfixable: {stats['provenance_unfixable']}")
     print(f"  Success: {stats['success']}")
     
-    return result
+    # Build provenance shifts info
+    provenance_info = {
+        "provenance_fixed": stats["provenance_fixed"],
+        "provenance_unfixable": stats["provenance_unfixable"],
+        "success": stats["success"],
+        "shifts": provenance_shifts,
+    }
+    
+    return result, provenance_info
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +624,7 @@ def main():
     primock_transcripts = load_all_primock_transcripts(primock_ids)
     
     print("\n5. Building SIMORD dataset...")
-    data = build_simord_dataset(reallocation, orders_map, acibench_transcripts, primock_transcripts)
+    data, provenance_info = build_simord_dataset(reallocation, orders_map, acibench_transcripts, primock_transcripts)
     
     print("\n6. Validating counts...")
     validate_counts(reallocation, data)
@@ -466,7 +635,13 @@ def main():
     print("\n8. Saving to disk...")
     save_to_disk(data)
     
-    print("\n8. Pushing to HuggingFace Hub...")
+    # Save provenance shifts to JSON
+    provenance_path = DATA_DIR / "provenance_shifts.json"
+    with open(provenance_path, "w", encoding="utf-8") as f:
+        json.dump(provenance_info, f, indent=2)
+    print(f"Saved provenance shifts to {provenance_path}")
+    
+    print("\n9. Pushing to HuggingFace Hub...")
     push_to_hub(data)
     
     print("\n" + "=" * 60)
